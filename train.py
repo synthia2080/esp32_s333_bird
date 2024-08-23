@@ -3,6 +3,7 @@ import librosa
 import numpy as np
 import pandas as pd
 import tensorflow as tf
+import cv2
 import keras
 from keras import layers, models, optimizers, utils
 from tensorflow import image
@@ -19,6 +20,29 @@ DATA_DIR = "./datasets/ff1010"
 classes = [1,0] # 1 = Bird, 0 = No bird
 
 
+def select_pixels(spectrogram):
+    row_median = np.median(spectrogram, axis=0)
+    col_median = np.median(spectrogram, axis=1)
+
+
+    for i, row in enumerate(spectrogram, start=0):
+        for i2, item in enumerate(row, start=0):
+            if not (item >= row_median[i2]*3 and item >= col_median[i]*3):
+                spectrogram[i][i2] = 0
+
+    return spectrogram
+
+
+def erosion(spectrogram):
+    kernel = (3,3)
+
+    blurred = cv2.blur(spectrogram, kernel)
+    eroded = cv2.erode(blurred, kernel, iterations=1)
+    dilated = cv2.dilate(eroded, kernel, iterations=1)
+
+    return dilated
+
+
 def preprocess_data(data_dir, target_shape=(128,128)):
     data = []
 
@@ -33,38 +57,74 @@ def preprocess_data(data_dir, target_shape=(128,128)):
     labels = df["hasbird"].tolist()
     audio_paths = df["wav_path"].tolist()
 
-    # Generate spectrograms 
-    for path in audio_paths:
+
+    # Generate spectrograms
+    len_audiopaths = len(audio_paths)
+    for i, path in enumerate(audio_paths):
+
+        # Only here for sanity since this shit takes a long time
+        if i % 50 == 0:
+            print(f"{i}/{len_audiopaths} spectrograms")
+
         audio_data, sample_rate = librosa.load(path, sr=None)
         spectrogram = librosa.feature.melspectrogram(y=audio_data, sr=sample_rate)
+
+        # Apply post processing 
+        spectrogram = select_pixels(spectrogram)
+        # spectrogram = erosion(spectrogram)
+
         spectrogram = image.resize(np.expand_dims(spectrogram, axis=-1), target_shape)
         
         data.append(spectrogram)
 
+
     return np.array(labels), np.array(data)
 
 
-labels, data = preprocess_data(DATA_DIR)
+def main():
+    labels_out_dir = os.path.join(DATA_DIR, "labels.npy")
+    data_out_dir = os.path.join(DATA_DIR, "data.npy")
+    # print(f"Built with cuda: {tf.test.is_built_with_cuda()}")
+    # print(f"GPU available: {tf.test.is_gpu_available(cuda_only=False, min_cuda_compute_capability=None)}")
+    # print(f"GPU: {print(tf.config.list_physical_devices('GPU'))}")
 
 
-x_train, x_test, y_train, y_test = train_test_split(data, labels, test_size=0.2, random_state=333)
+    # print("Creating Data...")
+    # labels, data = preprocess_data(DATA_DIR, (256,256))
 
-input_shape = x_train[0].shape
-model = keras.Sequential(
-    [
-    layers.Input(shape=input_shape),
-    layers.Conv2D(32, (3,3), activation='relu'),
-    layers.MaxPool2D((2,2)),
-    layers.Conv2D(64,(3,3), activation='relu'),
-    layers.MaxPool2D((2,2)),
-    layers.Flatten(),
-    layers.Dense(64, activation='relu'),
-    layers.Dense(len(classes), activation='softmax')
-    ]
-)
+    # # Save numpy arrays to save time for late runs
+    # np.save(labels_out_dir, labels)
+    # np.save(data_out_dir, data)
 
-model.compile(optimizer=optimizers.Adam(learning_rate=0.001), loss='categorical_crossentropy', metrics=['accuracy'])
-model.fit(x_train, y_train, epochs=50, batch_size=32, validation_data=(x_test,y_test))
+    labels = np.load(labels_out_dir)
+    data = np.load(data_out_dir)
 
-test_accuracy = model.evaluate(x_test, y_test, verbose=0)
-print(test_accuracy)
+    x_train, x_test, y_train, y_test = train_test_split(data, labels, test_size=0.2, random_state=333)
+
+
+    input_shape = x_train[0].shape
+
+    model = keras.Sequential(
+        [
+        layers.Input(shape=input_shape),
+        layers.Conv2D(64, (3,3), activation='relu'),
+        layers.MaxPool2D((2,2)),
+        layers.Conv2D(128,(3,3), activation='relu'),
+        layers.MaxPool2D((2,2)),
+        layers.Flatten(),
+        layers.Dense(64, activation='relu'),
+        layers.Dense(len(classes), activation='softmax')
+        ]
+    )
+
+    model.compile(optimizer=optimizers.Adam(learning_rate=0.001), loss='sparse_categorical_crossentropy', metrics=['accuracy'])
+    model.fit(x_train, y_train, epochs=50, batch_size=4, validation_data=(x_test,y_test))
+
+    
+    test_accuracy = model.evaluate(x_test, y_test, verbose=0)
+    
+    print(test_accuracy[1])
+
+
+if __name__ == "__main__":
+    main()

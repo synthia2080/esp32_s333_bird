@@ -21,21 +21,32 @@ DATA_DIR = "./datasets/ff1010"
 classes = [1,0] # 1 = Bird, 0 = No bird
 
 
+def relu6(x):
+    return min(max(0,x), 6)
+
+
 class invert_res_block(keras.Model):
     def __init__(self, expand, squeeze, kernel):
         super(invert_res_block, self).__init__()
 
-        self.conv2D_squeeze = layers.Conv2D(squeeze, (1,1), activation='relu')
-        self.depthwise_conv2D_33 = layers.DepthwiseConv2D(kernel, activation='relu', padding='same')
-        self.conv2D_expand = layers.Conv2D(expand, (1,1), activation='relu')
+        self.conv2D_squeeze = layers.Conv2D(expand, (1,1), activation='relu6')
+        self.bn1 = layers.BatchNormalization()
+        self.depthwise_conv2D_33 = layers.DepthwiseConv2D(kernel, activation='relu6', padding='same')
+        self.bn2 = layers.BatchNormalization()
+        self.conv2D_expand = layers.Conv2D(squeeze, (1,1))
+        self.bn3 = layers.BatchNormalization()
 
 
     def call(self, input_tensor):
         x = self.conv2D_squeeze(input_tensor)
+        x = self.bn1(x)
         x = self.depthwise_conv2D_33(x)
+        x = self.bn2(x)
         x = self.conv2D_expand(x)
+        x = self.bn3(x)
 
         return tf.math.add(x, input_tensor)
+
 
 def select_pixels(spectrogram):
     row_median = np.median(spectrogram, axis=0)
@@ -125,11 +136,12 @@ def main():
     model = keras.Sequential(
         [
         layers.Input(shape=input_shape),
-        layers.Conv2D(128, (3,3), activation='relu'),
+        layers.Conv2D(64, (3,3), activation='relu6'),
         layers.MaxPool2D((2,2)),
-        invert_res_block(128, 16, (3,3)),
-        invert_res_block(128, 16, (3,3)),
-        invert_res_block(128, 16, (3,3)),
+        invert_res_block(128, 64, (3,3)),
+        invert_res_block(128, 64, (5,5)),
+        invert_res_block(128, 64, (3,3)),
+        layers.Conv2D(128, (1,1), activation='relu6'),
         layers.GlobalAveragePooling2D(),
         layers.Flatten(),
         layers.Dense(len(classes), activation='softmax')
@@ -137,7 +149,7 @@ def main():
     )
 
     model.compile(optimizer=optimizers.Adam(learning_rate=0.0001), loss='sparse_categorical_crossentropy', metrics=['accuracy'])
-    model.fit(x_train, y_train, epochs=50, batch_size=4, validation_data=(x_test,y_test))
+    model.fit(x_train, y_train, epochs=15, batch_size=4, validation_data=(x_test,y_test))
 
     
     test_accuracy = model.evaluate(x_test, y_test, verbose=0)

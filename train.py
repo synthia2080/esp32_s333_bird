@@ -7,6 +7,7 @@ import cv2
 import keras
 from keras import layers, models, optimizers, utils
 from tensorflow import image
+import tensorflow as tf
 from sklearn.model_selection import train_test_split
 # from keras.layers import Input, Conv2D, MaxPooling2D, Flatten, Dense
 # from tensorflow.keras.models import Model
@@ -19,6 +20,22 @@ from sklearn.model_selection import train_test_split
 DATA_DIR = "./datasets/ff1010"
 classes = [1,0] # 1 = Bird, 0 = No bird
 
+
+class invert_res_block(keras.Model):
+    def __init__(self, expand, squeeze, kernel):
+        super(invert_res_block, self).__init__()
+
+        self.conv2D_squeeze = layers.Conv2D(squeeze, (1,1), activation='relu')
+        self.depthwise_conv2D_33 = layers.DepthwiseConv2D(kernel, activation='relu', padding='same')
+        self.conv2D_expand = layers.Conv2D(expand, (1,1), activation='relu')
+
+
+    def call(self, input_tensor):
+        x = self.conv2D_squeeze(input_tensor)
+        x = self.depthwise_conv2D_33(x)
+        x = self.conv2D_expand(x)
+
+        return tf.math.add(x, input_tensor)
 
 def select_pixels(spectrogram):
     row_median = np.median(spectrogram, axis=0)
@@ -81,6 +98,7 @@ def preprocess_data(data_dir, target_shape=(128,128)):
     return np.array(labels), np.array(data)
 
 
+
 def main():
     labels_out_dir = os.path.join(DATA_DIR, "labels.npy")
     data_out_dir = os.path.join(DATA_DIR, "data.npy")
@@ -107,17 +125,18 @@ def main():
     model = keras.Sequential(
         [
         layers.Input(shape=input_shape),
-        layers.Conv2D(64, (3,3), activation='relu'),
+        layers.Conv2D(128, (3,3), activation='relu'),
         layers.MaxPool2D((2,2)),
-        layers.Conv2D(128,(3,3), activation='relu'),
-        layers.MaxPool2D((2,2)),
+        invert_res_block(128, 16, (3,3)),
+        invert_res_block(128, 16, (3,3)),
+        invert_res_block(128, 16, (3,3)),
+        layers.GlobalAveragePooling2D(),
         layers.Flatten(),
-        layers.Dense(64, activation='relu'),
         layers.Dense(len(classes), activation='softmax')
         ]
     )
 
-    model.compile(optimizer=optimizers.Adam(learning_rate=0.001), loss='sparse_categorical_crossentropy', metrics=['accuracy'])
+    model.compile(optimizer=optimizers.Adam(learning_rate=0.0001), loss='sparse_categorical_crossentropy', metrics=['accuracy'])
     model.fit(x_train, y_train, epochs=50, batch_size=4, validation_data=(x_test,y_test))
 
     

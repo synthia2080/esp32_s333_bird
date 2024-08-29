@@ -9,13 +9,7 @@ from keras import layers, models, optimizers, utils
 from tensorflow import image
 import tensorflow as tf
 from sklearn.model_selection import train_test_split
-# from keras.layers import Input, Conv2D, MaxPooling2D, Flatten, Dense
-# from tensorflow.keras.models import Model
-# from tensorflow.keras.optimizers import Adam
-# from sklearn.model_selection import train_test_split
-# from tensorflow.keras.utils import to_categorical
-# from tensorflow.image import resize
-# from tensorflow.keras.models import load_model
+import keras_tuner as kt
 
 DATA_DIR = "./datasets/ff1010"
 classes = [1,0] # 1 = Bird, 0 = No bird
@@ -29,9 +23,9 @@ class invert_res_block(keras.Model):
     def __init__(self, expand, squeeze, kernel):
         super(invert_res_block, self).__init__()
 
-        self.conv2D_squeeze = layers.Conv2D(expand, (1,1), activation='relu6')
+        self.conv2D_squeeze = layers.Conv2D(expand, (1,1), activation='swish')
         self.bn1 = layers.BatchNormalization()
-        self.depthwise_conv2D_33 = layers.DepthwiseConv2D(kernel, activation='relu6', padding='same')
+        self.depthwise_conv2D_33 = layers.DepthwiseConv2D(kernel, activation='swish', padding='same')
         self.bn2 = layers.BatchNormalization()
         self.conv2D_expand = layers.Conv2D(squeeze, (1,1))
         self.bn3 = layers.BatchNormalization()
@@ -109,6 +103,34 @@ def preprocess_data(data_dir, target_shape=(128,128)):
     return np.array(labels), np.array(data)
 
 
+def build_model(hp):
+    model = keras.Sequential()
+    hp_units1 = hp.Int("units1", min_value=32, max_value = 512, step=32)
+    hp_units2 = hp.Int("units2", min_value=32, max_value = 512, step=32)
+    hp_kernels1 = hp.Choice("kernel1", [1,2,3,4,5,6])
+    hp_kernels2 = hp.Choice("kernel2", [1,2,3,4,5,6])
+    hp_kernel3_MP = hp.Choice("kernel3_MP", [1,2,3,4,5,6])
+    hp_kernels4 = hp.Choice("kernel4", [1,2,3,4,5,6])
+    # hp_units3_res = hp.Choice("units3_res", [1,2,3,4,5,6])
+    hp_units4_res = hp.Choice("units4_res", [1,2,3,4,5,6])
+
+    model.add(layers.Conv2D(hp_units1, hp_kernels4, activation='relu'))
+    model.add(layers.Conv2D(hp_units2, hp_kernels4, activation='relu'))
+    model.add(layers.MaxPool2D(hp_kernel3_MP))
+    model.add(invert_res_block(hp_units2, hp_units4_res, hp_kernels1))
+    model.add(invert_res_block(hp_units2, hp_units4_res, hp_kernels2))
+    model.add(invert_res_block(hp_units2, hp_units4_res, hp_kernels1))
+    model.add(layers.Conv2D(hp_units1, hp_kernels4, activation='relu'))
+    model.add(layers.Conv2D(hp_units2, hp_kernels4, activation='relu'))
+    model.add(layers.GlobalAveragePooling2D())
+    model.add(layers.Flatten())
+    model.add(layers.Dense(len(classes), activation='softmax'))
+
+    model.compile(optimizer=optimizers.Adam(learning_rate=0.0001), loss='sparse_categorical_crossentropy', metrics=['accuracy'])
+    return model
+
+
+
 
 def main():
     labels_out_dir = os.path.join(DATA_DIR, "labels.npy")
@@ -132,24 +154,47 @@ def main():
 
 
     input_shape = x_train[0].shape
+    print(input_shape)
 
     model = keras.Sequential(
         [
-        layers.Input(shape=input_shape),
-        layers.Conv2D(64, (3,3), activation='relu6'),
+        layers.Conv2D(32, (2,2), activation='relu'),
+        layers.Conv2D(288, (2,2), activation='relu'),
         layers.MaxPool2D((2,2)),
-        invert_res_block(128, 64, (3,3)),
-        invert_res_block(128, 64, (5,5)),
-        invert_res_block(128, 64, (3,3)),
-        layers.Conv2D(128, (1,1), activation='relu6'),
+        invert_res_block(288, 1, (5,5)),
+        invert_res_block(288, 1, (1,1)),
+        invert_res_block(288, 1, (5,5)),
+        layers.Conv2D(32, (2,2), activation='relu'),
+        layers.Conv2D(288, (2,2), activation='relu'),
         layers.GlobalAveragePooling2D(),
         layers.Flatten(),
         layers.Dense(len(classes), activation='softmax')
         ]
     )
 
+    # try:
+    #     tuner = kt.Hyperband(build_model, objective='val_accuracy', max_epochs=10, factor=3, directory='./tuning', project_name='test_1')
+    #     tuner.search(x_train,y_train,epochs=10, validation_split=0.2)
+    # except Exception as e:
+    #     print(f"Error occured during tuning: {e}")
+
+    # best_hps = tuner.get_best_hyperparameters(num_trials=1)[0]
+
+    # print(f"""
+    #     Hyperparameter search is complete. The best parameters are:\n
+    #     units1: {best_hps.get('units1')}\n
+    #     units2: {best_hps.get('units2')}\n
+    #     units4_res {best_hps.get('units4_res')}\n
+    #     kernel1: {best_hps.get('kernel1')}\n
+    #     kernel2: {best_hps.get('kernel2')}\n
+    #     kernel3_MP: {best_hps.get('kernel3_MP')}\n
+    #     kernel4: {best_hps.get('kernel4')}\n
+    #        """)
+
+    
     model.compile(optimizer=optimizers.Adam(learning_rate=0.0001), loss='sparse_categorical_crossentropy', metrics=['accuracy'])
     model.fit(x_train, y_train, epochs=15, batch_size=4, validation_data=(x_test,y_test))
+    model.save('./saved_models/model_v0.H5')
 
     
     test_accuracy = model.evaluate(x_test, y_test, verbose=0)

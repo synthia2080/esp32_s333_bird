@@ -29,7 +29,8 @@ class invert_res_block(keras.Model):
         self.bn2 = layers.BatchNormalization()
         self.conv2D_expand = layers.Conv2D(squeeze, (1,1))
         self.bn3 = layers.BatchNormalization()
-
+        
+        self.adjust_channels = layers.Conv2D(squeeze, (1, 1), padding='same')
 
     def call(self, input_tensor):
         x = self.conv2D_squeeze(input_tensor)
@@ -38,6 +39,9 @@ class invert_res_block(keras.Model):
         x = self.bn2(x)
         x = self.conv2D_expand(x)
         x = self.bn3(x)
+
+        if x.shape[-1] != input_tensor.shape[-1]:
+            input_tensor = self.adjust_channels(input_tensor)
 
         return tf.math.add(x, input_tensor)
 
@@ -159,13 +163,13 @@ def main():
     model = keras.Sequential(
         [
         layers.Conv2D(32, (2,2), activation='relu'),
-        layers.Conv2D(288, (2,2), activation='relu'),
+        layers.Conv2D(128, (2,2), activation='relu'),
         layers.MaxPool2D((2,2)),
-        invert_res_block(288, 1, (5,5)),
-        invert_res_block(288, 1, (1,1)),
-        invert_res_block(288, 1, (5,5)),
+        invert_res_block(128, 16, (5,5)),
+        invert_res_block(128, 16, (1,1)),
+        invert_res_block(128, 16, (5,5)),
+        layers.Conv2D(128, (2,2), activation='relu'),
         layers.Conv2D(32, (2,2), activation='relu'),
-        layers.Conv2D(288, (2,2), activation='relu'),
         layers.GlobalAveragePooling2D(),
         layers.Flatten(),
         layers.Dense(len(classes), activation='softmax')
